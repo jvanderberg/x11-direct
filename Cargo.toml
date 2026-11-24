@@ -1,0 +1,9 @@
+[package]
+name = "x11-direct"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "A tiny X11 client in one file, with no dependencies: windows, drawing on the server, fonts, input."
+license = "MIT"
+
+[dependencies]
