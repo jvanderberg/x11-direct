@@ -86,8 +86,10 @@ draws nothing without RENDER, so fall back to the plain calls:
 | `aa_triangles(&[[x0, y0, x1, y1, x2, y2]], alpha) -> bool` | Fractional coordinates. One request per 500 triangles: collect a frame's shapes of one colour and send them together. |
 | `aa_polygon(&[[x, y]], alpha) -> bool` | Convex. |
 | `aa_polyline(&[[x, y]], width, alpha) -> bool` | Connected lines with square ends. |
+| `aa_fill_ellipse(x, y, w, h, alpha) -> bool`, `aa_ellipse(x, y, w, h, width, alpha) -> bool` | Within the bounding box, like `fill_ellipse` and `ellipse`; the outline is `width` pixels wide, inside the box. |
 | `blend_rect(x, y, w, h, alpha) -> bool` | A see-through rectangle: dims or tints what's under it (a dialog's backdrop, a selection). |
-| `polygon_triangles(pts)`, `polyline_triangles(pts, width)` | Free functions: shapes as triangles for `aa_triangles`, to batch many shapes into one request. |
+| `polygon_triangles(pts)`, `polyline_triangles(pts, width)`, `ring_triangles(outer, inner)` | Free functions: shapes as triangles for `aa_triangles`, to batch many shapes into one request. |
+| `rounded_points(x, y, w, h, radius)`, `ellipse_points(x, y, w, h)` | Free functions: outlines for `aa_polygon` (buttons, panels, dots). |
 
 ## Clipboard and cursor
 

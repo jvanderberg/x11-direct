@@ -50,7 +50,7 @@
 //! | canvases | `canvas(w, h)` makes an off-screen image; `target(Some(c))` sends the drawing calls there (`None`: back to the frame); `blit(c, ...)` copies part of it. Draw something once, then reuse it for 28 bytes a frame. `frame()` is the frame itself, to copy from: to save what a menu covers, or to scroll part of the frame |
 //! | masks | `mask(w, h)` makes a 1-bit image, all clear; `mask_rects` sets rectangles of it. `blit_masked` copies only the pixels a mask has set. For a mask used again and again, make a `stencil` of it once and copy with `blit_stencil`. `fill_stippled` fills where a small repeated mask is set (a dither, for a see-through tint); `fill_poly_tiled` fills a polygon with a canvas repeated (a gradient under a graph). `target_window()` draws straight onto the window, over what `present` last showed |
 //! | outline text | `font_ttf(file_bytes, face, px)`: anti-aliased text from a TrueType file on the client's disk, rasterized here and sent once (RENDER). It then works with `text_font`, `text`, `text_width` and the metrics like any font. `Font::FIXED` without RENDER: fall back to `font()` |
-//! | smooth shapes | `aa_polygon`, `aa_polyline`, `aa_triangles` (with `polygon_triangles`, `polyline_triangles` and `rounded_points` to build batches), `blend_rect` (see-through): in the current colour at an opacity, anti-aliased. Each returns false without RENDER (`has_render()`), so draw the plain version |
+//! | smooth shapes | `aa_polygon`, `aa_polyline`, `aa_fill_ellipse`, `aa_ellipse`, `aa_triangles` (with `polygon_triangles`, `polyline_triangles`, `ring_triangles`, `rounded_points` and `ellipse_points` to build batches), `blend_rect` (see-through): in the current colour at an opacity, anti-aliased. Each returns false without RENDER (`has_render()`), so draw the plain version |
 //! | clipboard | `set_clipboard(text)`; `request_paste()`, and the text arrives as `Event::Paste` |
 //! | cursor | `cursor(Cursor::Hand)` and the rest: smooth macOS-style hand and I-beam with RENDER, else the cursor font. `define_cursor` sets your own ARGB image |
 //! | input | `event()` returns key down and up (a real release, unlike a terminal; a held key repeats as up/down pairs), mouse buttons and motion, resize (draw again) and close. `key` is ASCII (Latin-1) for printable keys, else a [`key`] constant; `mods` holds [`MOD_SHIFT`], [`MOD_CTRL`], [`MOD_ALT`]. `pointer()` asks where the mouse is, even outside the window |
@@ -393,6 +393,41 @@ pub fn polygon_triangles(pts: &[[f32; 2]]) -> Vec<[f32; 6]> {
         .windows(2)
         .map(|w| [p0[0], p0[1], w[0][0], w[0][1], w[1][0], w[1][1]])
         .collect()
+}
+
+/// Points around the ellipse in the box (x, y, w, h), for `aa_polygon`:
+/// more of them for a bigger ellipse, so the curve stays round.
+pub fn ellipse_points(x: f32, y: f32, w: f32, h: f32) -> Vec<[f32; 2]> {
+    ellipse_n(x, y, w, h, ellipse_steps(w, h))
+}
+
+fn ellipse_steps(w: f32, h: f32) -> usize {
+    ((w.max(h) * 0.75) as usize).clamp(16, 240)
+}
+
+fn ellipse_n(x: f32, y: f32, w: f32, h: f32, n: usize) -> Vec<[f32; 2]> {
+    let (rx, ry) = (w / 2.0, h / 2.0);
+    let (cx, cy) = (x + rx, y + ry);
+    (0..n)
+        .map(|i| {
+            let a = i as f32 / n as f32 * std::f32::consts::TAU;
+            [cx + rx * a.cos(), cy + ry * a.sin()]
+        })
+        .collect()
+}
+
+/// The band between two closed outlines with the same number of points
+/// (an ellipse and a smaller one inside it, say) as triangles.
+pub fn ring_triangles(outer: &[[f32; 2]], inner: &[[f32; 2]]) -> Vec<[f32; 6]> {
+    let n = outer.len().min(inner.len());
+    let mut t = Vec::with_capacity(2 * n);
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (a, b, c, d) = (outer[i], outer[j], inner[j], inner[i]);
+        t.push([a[0], a[1], b[0], b[1], c[0], c[1]]);
+        t.push([a[0], a[1], c[0], c[1], d[0], d[1]]);
+    }
+    t
 }
 
 /// The outline of a rounded rectangle, for `aa_polygon`: a menu, a
@@ -2000,6 +2035,21 @@ impl X11 {
     /// Connected lines `width` pixels wide.
     pub fn aa_polyline(&mut self, pts: &[[f32; 2]], width: f32, alpha: u8) -> bool {
         self.aa_triangles(&polyline_triangles(pts, width), alpha)
+    }
+
+    /// A filled ellipse in the box (x, y, w, h).
+    pub fn aa_fill_ellipse(&mut self, x: f32, y: f32, w: f32, h: f32, alpha: u8) -> bool {
+        self.aa_polygon(&ellipse_points(x, y, w, h), alpha)
+    }
+
+    /// An ellipse's outline, `width` pixels wide, inside the box (x, y, w, h).
+    pub fn aa_ellipse(&mut self, x: f32, y: f32, w: f32, h: f32, width: f32, alpha: u8) -> bool {
+        // the same number of points on both, so the band pairs them up
+        let n = ellipse_steps(w, h);
+        let outer = ellipse_n(x, y, w, h, n);
+        let (iw, ih) = ((w - 2.0 * width).max(0.0), (h - 2.0 * width).max(0.0));
+        let inner = ellipse_n(x + width, y + width, iw, ih, n);
+        self.aa_triangles(&ring_triangles(&outer, &inner), alpha)
     }
 
     /// A rectangle that lets what's under it show through.
