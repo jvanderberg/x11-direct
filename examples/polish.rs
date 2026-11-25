@@ -450,17 +450,16 @@ fn main() {
     let data = (0..40)
         .map(|i| 0.5 + 0.3 * (i as f32 * 0.35).sin() + 0.1 * (i as f32 * 1.3).cos())
         .collect();
-    let status = if x.has_render() {
-        "Smooth: RENDER is here"
-    } else {
-        "Plain: no RENDER (try ssh -Y)"
-    };
+    if !x.has_render() {
+        // say why it looks plain, once, where a developer will see it
+        eprintln!("polish: this X server has no RENDER, so drawing is plain (with ssh, try -Y)");
+    }
     let mut app = App {
         c,
         font,
         field: String::new(),
         size: 1,
-        status: status.into(),
+        status: "Ready".into(),
         menu: None,
         dialog: None,
         data,
