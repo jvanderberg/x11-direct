@@ -66,38 +66,11 @@ pub fn bell(&mut self) {
 }
 ```
 
-### A mouse cursor from the cursor font
+### Cursors
 
-```rust
-/// shape: an XC_ value from cursorfont.h, e.g. 68 left_ptr, 60 hand2, 152 xterm, 150 watch
-pub fn cursor(&mut self, shape: u32) {
-    let font = self.new_id();
-    self.req(45, 0, 3 + 2);                 // OpenFont "cursor"
-    self.put32(font);
-    self.put16(6);
-    self.put16(0);
-    self.put_padded(b"cursor");
-    let cur = self.new_id();
-    self.req(94, 0, 8);                     // CreateGlyphCursor
-    self.put32(cur);
-    self.put32(font);                       // source font
-    self.put32(font);                       // mask font
-    self.put16(shape);                      // source char
-    self.put16(shape + 1);                  // mask char: the next glyph
-    for v in [0, 0, 0, 0xffff, 0xffff, 0xffff] {
-        self.put16(v);                      // foreground black, background white
-    }
-    let win = self.win;
-    self.req(2, 0, 3 + 1);                  // ChangeWindowAttributes
-    self.put32(win);
-    self.put32(0x4000);                     // cursor
-    self.put32(cur);
-    self.req(46, 0, 2);                     // CloseFont (the cursor keeps it)
-    self.put32(font);
-}
-```
-
-Create each cursor once, and switch with ChangeWindowAttributes.
+`cursor()` is built in now (the cursor font, or a RENDER cursor from
+`define_cursor`). Create each cursor once, keep its ID, and switch with
+ChangeWindowAttributes (2, value mask 0x4000), which is 16 bytes.
 
 ### A new event: focus in and out
 
@@ -130,28 +103,40 @@ the same GC.
 
 ## Bigger additions: what they involve
 
-- **Clipboard (copy):** SetSelectionOwner (22) for the `CLIPBOARD` atom.
-  Then answer SelectionRequest events (code 30): ChangeProperty the text
-  onto the requestor's window and property, and send a SelectionNotify
-  with SendEvent (25). Answer `TARGETS` too. **Paste:** ConvertSelection
-  (24) to your own window and property, wait for SelectionNotify (31),
-  then GetProperty (20) with delete. Large transfers use INCR, so skip
-  them in a small app.
+- **Clipboard:** built in (`set_clipboard`, `request_paste`). The parts
+  that are easy to get wrong: answer SelectionRequest (30) from the event
+  loop, never with a round trip of your own while handling another
+  reply; send a SelectionNotify with property None for targets you
+  don't support; and read the pasted property with GetProperty only
+  after SelectionNotify (31) arrives, outside the event handler.
 - **More than one window:** keep a list of window IDs, give each its own
   back buffer, and route events by the window field: offset 12 in key,
   button and motion events, 4 in Expose, 8 in ConfigureNotify.
-- **MIT-SHM** (shared-memory images, local server only), **RENDER**
-  (alpha blending, anti-aliased glyphs): call QueryExtension (98) with the
-  name to get the extension's major opcode, then send its requests with
-  that opcode and the minor opcode in the data byte. These are big
-  changes, and the point where switching to the `x11rb` crate is
-  reasonable.
-- **Xauthority:** the connection setup in `open()` sends an empty
-  authorization name and data. To support `MIT-MAGIC-COOKIE-1`, parse
-  `~/.Xauthority` (a sequence of family u16 BE, address, display number,
-  name and data, each prefixed with a u16 BE length), find the entry for
-  the display, and send its name and data in the setup request (with the
-  lengths in the header, and each padded to 4 bytes).
+- **MIT-SHM** (shared-memory images, local server only): call
+  QueryExtension (98) with the name to get the extension's major opcode,
+  then send its requests with that opcode and the minor opcode in the
+  data byte. RENDER in `lib.rs` is a worked example: QueryVersion, then
+  QueryPictFormats to find the A8, RGB24 and ARGB32 formats, then
+  CreatePicture on the drawables it draws to.
+
+## RENDER, as used here
+
+- **Text:** a glyph set in A8 format (CreateGlyphSet), glyphs added in
+  batches under 16 KB (AddGlyphs, each glyph's rows padded to 4 bytes),
+  then CompositeGlyphs8 with a solid-fill picture (CreateSolidFill) as the
+  source. The client rasterizes the outlines, so the server needs no
+  fonts at all.
+- **Shapes:** Triangles (minor 11) with op Over and an A8 mask format,
+  which is what makes the edges smooth. Coordinates are 16.16 fixed point.
+- **Translucency:** FillRectangles (minor 26) with op Over. Colours are
+  16 bits per channel and premultiplied by alpha.
+- **Cursors:** a depth-32 pixmap, PutImage of premultiplied ARGB, a
+  picture in the ARGB32 format, CreateCursor (minor 27), then free the
+  picture and pixmap: the cursor keeps its own copy.
+- A drawable needs a picture before RENDER can draw on it. Make it once
+  per canvas and free it with the canvas, or the server leaks it.
+- An untrusted client (`ssh -X`, the SECURITY extension) is told RENDER
+  doesn't exist. `ssh -Y` is trusted.
 
 ## Debugging
 

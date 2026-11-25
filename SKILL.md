@@ -1,15 +1,18 @@
 ---
 name: x11-direct
-description: Build lightweight X11 GUI apps in Rust with no dependencies (no Xlib, xcb or x11rb) using a single-file library that speaks the X11 protocol directly over a socket. Use when writing a small windowed tool, monitor, dashboard, game or demo for an X server (Linux, Xvfb, XQuartz, or a remote display over the network, e.g. from an embedded Linux board), when bandwidth or binary size matters, or when the user asks for an X11 app without a toolkit. Covers the library, the drawing patterns that keep traffic tiny, and a headless screenshot tool for checking what an app draws.
+description: Build lightweight X11 GUI apps in Rust with no dependencies (no Xlib, xcb or x11rb) using a single-file library that speaks the X11 protocol directly over a socket, with anti-aliased TrueType text, smooth shapes, translucency, clipboard and cursors through RENDER. Use when writing a small windowed tool, monitor, dashboard, game or demo for an X server (Linux, Xvfb, XQuartz, or a remote display over the network, e.g. from an embedded Linux board), when bandwidth or binary size matters, or when the user asks for an X11 app without a toolkit. Covers the library, the drawing patterns that keep traffic tiny, and a headless screenshot tool for checking what an app draws.
 ---
 
 # x11-direct: small X11 apps in Rust, no dependencies
 
-`src/lib.rs` in this skill's directory is the whole library: about 1,500
+`src/lib.rs` in this skill's directory is the whole library: about 3,200
 lines including its documentation, `std` only. It opens one window on an X server and gives an
 immediate-mode drawing API (rectangles, lines, ellipses, polygons, text,
 images, off-screen canvases, masks) with a back buffer, plus key, mouse,
-resize and close events. The program is an X client, so the window can be
+resize, close and paste events. Where the server has the RENDER extension
+it adds anti-aliased TrueType text (rasterized on the client, from a font
+file), smooth shapes, translucency and full-colour cursors. It also has
+the clipboard and Xauthority cookies (so `ssh -X`/`-Y` work). The program is an X client, so the window can be
 on another machine: the drawing happens on the server, and the program
 sends only small requests.
 
@@ -18,11 +21,11 @@ It started as `x11.h` in rp2350-native-linux, where it drives xpulse
 xterm and Wolfenstein 3D from a microcontroller-class Linux board over
 Wi-Fi. That's where the patterns in `reference/patterns.md` come from.
 
-**Don't use it for:** anti-aliased or scalable text (it uses the server's
-core bitmap fonts), HiDPI, clipboard or input methods, accessibility,
-native widgets, or a Wayland session without XWayland. Use egui, iced,
-Slint or GTK for those. If an app needs the full protocol (extensions,
-Xauthority cookies), use the `x11rb` crate; the patterns here still apply.
+**Don't use it for:** HiDPI, non-Latin text in outline fonts, input
+methods, accessibility, native widgets, or a Wayland session without
+XWayland. Use egui, iced, Slint or GTK for those. If an app needs the full
+protocol (other extensions, several windows), use the `x11rb` crate; the
+patterns here still apply.
 
 ## Setting up a project
 
@@ -35,9 +38,37 @@ Pick one:
 2. **Path or git dependency**: `x11-direct = { path = "/path/to/this/skill" }`,
    then `use x11_direct::{X11, Event, key};`.
 
-The examples in `examples/` (`hello`, `xeyes`, `graph`, `menu`, `gallery`)
-run with `cargo run --example NAME` from this skill's directory. Start a new
-app from the closest one.
+The examples in `examples/` (`hello`, `xeyes`, `graph`, `menu`, `gallery`,
+`polish`) run with `cargo run --example NAME` from this skill's directory.
+Start a new app from the closest one. For anything a person will look at
+(a tool, a monitor, a form), start from `polish`.
+
+## Making it look like a real app
+
+The core protocol alone looks like 1995. These are cheap and make the
+difference (`reference/patterns.md` section 13 has the details, and
+`examples/polish.rs` has them all):
+
+- **Text:** `font_ttf` with a TrueType file from disk (Helvetica Neue on
+  macOS, DejaVu/Liberation/Noto on Linux), falling back to the core
+  Helvetica. Row heights from font metrics, never constants.
+- **Shapes:** rounded buttons, fields and panels with
+  `aa_polygon(&rounded_points(..))`; graphs as `aa_triangles` batches
+  with a translucent fill. Icons rendered on the client, anti-aliased
+  against their background, and cached in canvases.
+- **Popups:** a soft layered shadow, save-under that includes the shadow,
+  hover highlight, a tick on the current choice, keyboard navigation. A
+  dropdown instead of a row of buttons for one-of-many choices.
+- **Destructive actions** ask first, over a window dimmed with
+  `blend_rect`, with a red default button.
+- **Cursors:** `cursor(Cursor::Hand)` over clickables and
+  `cursor(Cursor::Text)` over fields, set on every `Motion`. The library
+  draws macOS-style smooth versions with RENDER.
+- **Clipboard:** Copy for anything worth pasting elsewhere, Ctrl+C/Ctrl+V.
+- **Status feedback** after actions, errors in red, and dark mode from
+  (light, dark) colour pairs.
+- **Fallbacks:** every RENDER call returns false without RENDER
+  (`has_render()`); draw the plain version and keep it tidy.
 
 ## How to think about it: the cost model
 
@@ -149,7 +180,12 @@ loop {
 - **Connection refused:** the server must allow the client. For a remote
   server, run `xhost +CLIENT-ADDRESS` on it (with XQuartz, first enable
   Settings > Security > "Allow connections from network clients"). For a
-  local server, run `xhost +local:`. Xauthority cookies aren't supported.
+  local server, run `xhost +local:`. The library sends the display's
+  MIT-MAGIC-COOKIE-1 from `~/.Xauthority`, so `ssh -X`/`-Y` and servers
+  started with `-auth` work without `xhost`.
+- **Smooth text and shapes over `ssh -X` come out plain:** an untrusted
+  client doesn't get RENDER. Use `ssh -Y`. With XQuartz, run it as
+  `DISPLAY=:0 ssh -Y host app` if launchd's DISPLAY is stale.
 - **Use one `X11` per process and one window.** The library isn't
   thread-safe, so keep it on one thread.
 
@@ -179,6 +215,9 @@ XQuartz after the `xhost` step above.
 
 ## Before calling an app done
 
+- It uses an outline font where RENDER exists, has hover cursors, and
+  looks deliberate both with RENDER and without it (see "Making it look
+  like a real app").
 - It handles `Event::Close`, q/Escape where that fits, and resizing (lays
   out again for any size, with `min_size()` set).
 - An idle app sleeps in `wait(-1)` or a long timeout and sends nothing.
@@ -193,6 +232,6 @@ XQuartz after the `xhost` step above.
 
 - `reference/api.md`: every call, with its arguments and notes.
 - `reference/patterns.md`: the techniques above in detail, with code.
-- `reference/protocol.md`: how the library encodes requests, and how to
-  add one it doesn't have (window title in UTF-8, the cursor, the
-  clipboard, an extension).
+- `reference/protocol.md`: how the library encodes requests, how it uses
+  RENDER, and how to add one it doesn't have (window title in UTF-8, the
+  bell, focus events, an extension).
