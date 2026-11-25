@@ -4,7 +4,9 @@ A Claude Code skill and a Rust library for small X11 apps with **no
 dependencies**. One file, `src/lib.rs`, speaks the X11 protocol directly
 over a socket, with no Xlib, xcb or x11rb. It gives you a window, drawing
 done on the server (shapes, text, canvases, masks), and key, mouse,
-resize and close events.
+resize, close and paste events. With the RENDER extension (Xorg, Xvfb,
+XQuartz) it also draws anti-aliased TrueType text, smooth shapes,
+translucency and full-colour cursors, and it has the clipboard.
 
 ![The gallery example: shapes, batches, an image, fonts and Unicode, masked and stencilled sprites, a stipple tint, a tiled polygon, a copy from the frame](docs/gallery.png)
 
@@ -75,23 +77,26 @@ fn main() {
 | `graph` | A live graph that scrolls on the server for about 400 bytes an update, fonts, relayout after a resize |
 | `menu` | A list that redraws only changed rows and scrolls by copying, a right-click menu that restores what it covered, stdin read alongside X |
 | `gallery` | Every drawing feature, with frames paced by fences |
+| `polish` | A form that looks current: TrueType text, rounded buttons, a dropdown with a shadow, a dimmed confirm dialog, hover cursors, the clipboard, a smooth graph, and plain fallbacks without RENDER |
 
 ## Running
 
 `DISPLAY` names the X server: `:0` for a local one, or `HOST:0` for one
-across the network. The server has to let the client in, because
-Xauthority cookies aren't supported. On the machine with the screen, run
-`xhost +CLIENT-ADDRESS` (or `xhost +local:`). With XQuartz, first turn on
-Settings > Security > "Allow connections from network clients".
+across the network. The library sends the display's cookie from
+`~/.Xauthority`, so `ssh -Y host app` works (`-X` works too, but an
+untrusted client gets no RENDER, so text and shapes are plain).
+Otherwise, on the machine with the screen, run `xhost +CLIENT-ADDRESS` (or
+`xhost +local:`). With XQuartz, first turn on Settings > Security >
+"Allow connections from network clients".
 
 Without a display: `tools/x11shot.sh -e gallery -o shots/gallery.png`
 (this needs Docker).
 
 ## Limits
 
-One window, core protocol only. That means bitmap fonts with no
-anti-aliasing, no clipboard, no input methods and no extensions, and it
-needs a TrueColor display. `reference/protocol.md` explains how to add
+One window, the core protocol plus RENDER. Outline fonts cover Latin-1
+(TrueType glyf outlines, no hinting or kerning), the clipboard is text
+only, and there are no input methods. It needs a TrueColor display. `reference/protocol.md` explains how to add
 requests. For the full protocol, use [x11rb](https://crates.io/crates/x11rb).
 
 ## License

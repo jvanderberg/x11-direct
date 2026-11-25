@@ -10,7 +10,7 @@ and the next `event()` returns `Event::Close`.
 
 | Call | Notes |
 |---|---|
-| `X11::open(display: Option<&str>) -> io::Result<X11>` | `None` uses `$DISPLAY`. Accepts `HOST:N` (TCP 6000+N), `:N` or `unix:N` (`/tmp/.X11-unix/XN`), or a socket path (XQuartz's `/private/tmp/com.apple.launchd.*/org.xquartz:0`). The error explains the fix (DISPLAY unset, `xhost`, not TrueColor). |
+| `X11::open(display: Option<&str>) -> io::Result<X11>` | `None` uses `$DISPLAY`. Accepts `HOST:N` (TCP 6000+N), `:N` or `unix:N` (`/tmp/.X11-unix/XN`), or a socket path (XQuartz's `/private/tmp/com.apple.launchd.*/org.xquartz:0`). Sends the display's MIT-MAGIC-COOKIE-1 from `$XAUTHORITY` or `~/.Xauthority` if there is one, so `ssh -X`/`-Y` work. The error explains the fix (DISPLAY unset, `xhost`, xauth, not TrueColor). |
 | `background(pixel)` | What the window shows where nothing has been drawn, including new areas after it grows. Call it before `window()`. |
 | `window(title, w, h)` | Opens and maps the one window. Call it once. |
 | `min_size(w, h)` | A hint to the window manager. Call it after `window()`. |
@@ -54,6 +54,8 @@ and the next `event()` returns `Event::Close`.
 | `text_unicode(x, y, s)` | Characters up to U+FFFF, for an `iso10646-1` font. It advances by the font's cell width. |
 | `text_width(f, s) -> i32` | Computed locally, so it costs nothing to send. |
 | `font_ascent(f)`, `font_descent(f)` | Above and below the baseline. A row's height is ascent + descent + padding. |
+| `font_ttf(data, name, px) -> Font` | Anti-aliased text from a TrueType file's bytes (`.ttf`, or a `.ttc` collection: the face whose full name is `name`, such as `"Helvetica Neue Bold"`, else the first), `px` pixels to the em. Rasterized on the client and sent once as a RENDER glyph set (about 25 KB for a 13 px font), then text costs the same as core text. Latin-1 only; glyf outlines, not CFF (`.otf`). `Font::FIXED` without RENDER or if the file can't be read, so fall back to `font()`. Works with `text`, `text_width`, `font_ascent` and the rest. |
+| `has_render() -> bool` | Whether the server has the RENDER extension: `font_ttf`, the `aa_` calls, `blend_rect` and the smooth cursors need it. Xorg, Xvfb and XQuartz have it; an untrusted `ssh -X` client doesn't (use `-Y`). |
 
 ## Canvases, masks and stencils
 
@@ -71,6 +73,30 @@ and the next `event()` returns `Event::Close`.
 | `blit_stencil(s, c, sx, sy, w, h, dx, dy)` | A masked copy that only moves the clip origin, so it's cheap. |
 | `fill_stippled(m, x, y, w, h)` | Fills where the small mask `m`, repeated, is set: a dither for a see-through tint. |
 | `fill_poly_tiled(c, ox, oy, &[[x, y]])` | A polygon that doesn't cross itself, filled with canvas `c` repeated from (ox, oy). Up to 2000 points. Use it for gradients. |
+
+## Smooth shapes and translucency (RENDER)
+
+These draw in the current `color()` at an opacity (0-255), with
+anti-aliased edges, onto the current target. Each returns `false` and
+draws nothing without RENDER, so fall back to the plain calls:
+`if !x.aa_polygon(&pts, 255) { x.fill_poly(&ipts) }`.
+
+| Call | Notes |
+|---|---|
+| `aa_triangles(&[[x0, y0, x1, y1, x2, y2]], alpha) -> bool` | Fractional coordinates. One request per 500 triangles: collect a frame's shapes of one colour and send them together. |
+| `aa_polygon(&[[x, y]], alpha) -> bool` | Convex. |
+| `aa_polyline(&[[x, y]], width, alpha) -> bool` | Connected lines with square ends. |
+| `blend_rect(x, y, w, h, alpha) -> bool` | A see-through rectangle: dims or tints what's under it (a dialog's backdrop, a selection). |
+| `polygon_triangles(pts)`, `polyline_triangles(pts, width)` | Free functions: shapes as triangles for `aa_triangles`, to batch many shapes into one request. |
+
+## Clipboard and cursor
+
+| Call | Notes |
+|---|---|
+| `set_clipboard(text)` | Owns CLIPBOARD and PRIMARY and answers other programs' requests (UTF8_STRING, STRING, TEXT, TARGETS) from inside `event()`, so keep draining events. |
+| `request_paste()` | Asks the CLIPBOARD owner for text. It arrives later as `Event::Paste(String)` (nothing arrives if the clipboard is empty or not text). |
+| `cursor(Cursor)` | The pointer's shape over the window: `Default` (the window manager's arrow), `Hand`, `Text`, `Wait`, `ResizeH`, `ResizeV`. Sends nothing if unchanged, so call it on every `Motion`. With RENDER, `Hand` and `Text` are smooth full-colour cursors in the style of macOS's; otherwise they come from the core cursor font. |
+| `define_cursor(c, w, h, &argb, hot) -> bool` | Use your own image for cursor `c`: premultiplied 0xAARRGGBB pixels, `hot` the pixel that points. Needs RENDER. |
 
 ## Showing frames and timing
 
@@ -96,6 +122,7 @@ pub enum Event {
     Motion { x: i32, y: i32, mods: u32 },
     Resize { w: i32, h: i32 },
     Close,                                                   // close button, or lost connection
+    Paste(String),                                           // after request_paste()
 }
 ```
 
@@ -117,7 +144,9 @@ pub enum Event {
   process.
 - The display must be TrueColor at 24 or 32 bits per pixel. Every current
   server is.
-- No authentication: the server must allow the client with `xhost`.
-- Core protocol only: no extensions (no MIT-SHM, RENDER or XInput2), no
-  clipboard, no input methods, and only the core bitmap fonts. See
+- Authentication is MIT-MAGIC-COOKIE-1 from the Xauthority file, or
+  none (the server allows the client with `xhost`).
+- One extension, RENDER, for anti-aliased text and shapes, translucency
+  and cursors. No MIT-SHM, XInput2 or input methods. Clipboard text only,
+  without INCR (large transfers). Outline fonts cover Latin-1. See
   `protocol.md` for adding requests.

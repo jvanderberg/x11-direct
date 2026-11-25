@@ -220,11 +220,44 @@ rectangle per run of one colour in each column.
   dither. Only the set pixels are filled, so the picture shows through.
   It's one request, where a palette or alpha change would mean sending the
   whole frame.
+- **See-through, properly:** with RENDER, `blend_rect(x, y, w, h, alpha)`
+  in the current colour is a real blend, one request. Use it for a
+  dialog's dimmed backdrop and keep the stipple as the fallback.
 - **A gradient:** draw a 1-pixel-wide canvas once, then fill any polygon
   with it repeated, using `fill_poly_tiled(tile, ox, oy, &pts)`. xpulse
   shades the area under each graph this way in one request.
 
 ## 10. Fonts and text
+
+**Prefer an outline font.** With RENDER (every current server, but not an
+untrusted `ssh -X` client), `font_ttf` reads a TrueType file on the
+*client*, rasterizes it with anti-aliasing and sends the glyphs once
+(about 25 KB a font). The server needs no fonts at all, and text then
+costs what core text costs. Try a list and fall back to the core fonts:
+
+```rust
+const FONTS: [(&str, &str); 3] = [
+    ("/System/Library/Fonts/HelveticaNeue.ttc", "Helvetica Neue"),   // a .ttc: pick the face by full name
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "DejaVu Sans"),
+    ("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", "Liberation Sans"),
+];
+let mut f = Font::FIXED;
+for (path, face) in FONTS {
+    if let Ok(data) = std::fs::read(path) {
+        f = x.font_ttf(&data, face, 13.0);                 // px to the em
+        if f != Font::FIXED { break; }
+    }
+}
+if f == Font::FIXED { f = x.font("-*-helvetica-medium-r-normal--14-*-*-*-p-*-iso8859-1"); }
+```
+
+Bold is another face (`"Helvetica Neue Bold"` from the same .ttc,
+`DejaVuSans-Bold.ttf`). Outline fonts are taller for their size than the
+bitmap ones, so take every row and line height from `font_ascent` and
+`font_descent`, never from a constant: a heading laid out for 6x13 gets
+clipped in DejaVu. If the font list comes up empty because RENDER is
+missing, print one line saying so (with the `ssh -Y` hint) rather than
+silently looking worse.
 
 The server's core fonts are bitmaps named by XLFD patterns. A server with
 the standard font packages (Xorg, Xvfb, XQuartz) has:
@@ -295,3 +328,80 @@ If you poll yourself, check `x.pending()` first. Round trips such as
 `sync()` read events into the queue, where your poll can't see them.
 xterm waits on the X connection and its pty this way, and xmc waits on X
 and every terminal tab's pty.
+
+## 13. Looking like a real app
+
+The core protocol draws jagged circles, square corners and bitmap text,
+which reads as a 1990s X client. A handful of touches make the same
+program look current. `examples/polish.rs` has all of them in one small
+form. Each RENDER call returns false without RENDER, so draw the plain
+version then.
+
+- **Anti-aliased text.** Use `font_ttf` (pattern 10). It does more for the
+  look than anything else here.
+- **Smooth shapes.** Rounded rectangles for buttons, fields, menus and
+  dialogs: `x.aa_polygon(&rounded_points(x, y, w, h, radius), 255)` in the
+  edge colour, then again one pixel in for the face. Collect many shapes
+  of one colour with `polygon_triangles`/`polyline_triangles` and send them
+  in one `aa_triangles`. A graph with a 1.5 px line and a fill under it
+  at alpha 40-60 is two requests per colour.
+- **Smooth icons without RENDER.** Render an icon on the client (signed
+  distance per pixel, coverage = `clamp(0.5 - d, 0, 1)`), blended onto the
+  colour it will sit on, and send it once into a canvas keyed by
+  (icon, colours). After that it's a 28-byte `blit`. The same trick makes
+  rounded corners: four small corner images plus `fill_rects` for the
+  middle. A theme change means new colours, so clear that cache.
+- **Floating things float.** A menu or dialog gets a soft shadow: six
+  `aa_polygon`s of black, each 1.6 px bigger and 3 px down, at alpha 8 on
+  a light theme and 16 on a dark one. Save the area under the *shadow*
+  too (pattern 4), or closing leaves a grey ring behind.
+- **Dropdowns, not rows of buttons.** A choice among several (signals,
+  sizes, modes) is a button showing the current value and a chevron,
+  opening a menu: hover highlight (redraw only the menu), a tick on the
+  current choice, short hints aligned right (`SIGKILL`, `Ctrl+C`), thin
+  rules between groups, Up/Down/Return/Escape, and a click outside closes
+  it. A context menu (right click) works the same way and is the natural
+  home for "Copy ...".
+- **Ask before destroying.** A Force Quit, a delete or a clear opens a
+  dialog over the whole window dimmed with `blend_rect` (black, alpha
+  about 64 light, 110 dark). The default button is the action, coloured
+  red, and Return/Escape answer it. Save the whole frame first, so
+  closing is one copy back.
+- **The pointer says what a click does.** `x.cursor(Cursor::Hand)` over
+  anything clickable, `Cursor::Text` over a text field, `Cursor::Default`
+  elsewhere. Work it out from the same hit test as clicks, in a
+  `cursor_at(x, y)`, and call `cursor()` on every `Motion` and after every
+  click (the thing under the pointer may have changed): it sends nothing
+  when the shape hasn't changed. With RENDER the hand and I-beam are smooth
+  macOS-style images; `define_cursor` takes your own.
+- **Copy and paste.** Offer Copy on whatever a user may want elsewhere
+  (an ID, a path, a command line, shell-quoted), and bind Ctrl+C/Ctrl+V.
+  `set_clipboard` is immediate; `request_paste` answers later with
+  `Event::Paste`, which goes into the focused field (first line only for a
+  one-line field).
+- **Feedback.** After an action, a short status line: "Sent SIGTERM to
+  1234" in the normal colour, the OS's error ("Operation not permitted")
+  in red.
+- **Dark mode.** Keep the palette as (light, dark) pairs, pick at start
+  (on macOS, `defaults read -g AppleInterfaceStyle` prints `Dark`), and
+  offer a toggle that redraws everything. Shadows and dimming need more
+  alpha on dark.
+- **Lay out from the font.** Toolbar, header and row heights from font
+  metrics; columns that drop out in a set order as the window narrows;
+  text that doesn't fit truncated with "..." by `text_width`.
+
+### Checking it
+
+- `tools/x11shot.sh` (Docker, Xvfb with DejaVu fonts) shows the Linux
+  look, and drives hover, menus and dialogs with xdotool.
+- On a Mac, XQuartz ships `Xvfb` and `xwd` in `/opt/X11/bin`: run
+  `/opt/X11/bin/Xvfb :77 -screen 0 1280x800x24 &`, start the app with
+  `DISPLAY=:77`, and capture with `DISPLAY=:77 xwd -root -silent`. The
+  output is XWD, which needs a converter (a few lines of Python with PIL).
+- Also try it without RENDER (`ssh -X` into the machine running it, or a
+  server started with `-extension RENDER`) and make sure every fallback
+  still looks deliberate.
+- XQuartz has no Retina mode: it scales X pixels up 2x, so everything
+  looks slightly soft on a Mac however it's drawn. `DISPLAY=:0` reaches
+  the XQuartz started by `startx` when launchd's DISPLAY socket is stale.
+
