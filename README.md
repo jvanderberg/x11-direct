@@ -8,7 +8,7 @@ resize, close and paste events. With the RENDER extension (Xorg, Xvfb,
 XQuartz) it also draws anti-aliased TrueType text, smooth shapes,
 translucency and full-colour cursors, and it has the clipboard.
 
-![The gallery example: shapes, batches, an image, fonts and Unicode, masked and stencilled sprites, a stipple tint, a tiled polygon, a copy from the frame](docs/gallery.png)
+![The polish example in light and dark: anti-aliased text, rounded controls, a dropdown menu with a shadow, a confirmation dialog over a dimmed window, and a smooth graph](docs/polish.png)
 
 The drawing happens on the X server, and the program sends small
 requests, so an app stays fast over a slow network. That makes it a good
@@ -77,7 +77,11 @@ fn main() {
 | `graph` | A live graph that scrolls on the server for about 400 bytes an update, fonts, relayout after a resize |
 | `menu` | A list that redraws only changed rows and scrolls by copying, a right-click menu that restores what it covered, stdin read alongside X |
 | `gallery` | Every drawing feature, with frames paced by fences |
-| `polish` | A form that looks current: TrueType text, rounded buttons, a dropdown with a shadow, a dimmed confirm dialog, hover cursors, the clipboard, a smooth graph, and plain fallbacks without RENDER |
+| `polish` | A form that looks current (the picture above): TrueType text, rounded buttons, a dropdown with a shadow, a dimmed confirm dialog, hover cursors, the clipboard, a smooth graph, dark mode (`--dark`, Ctrl+D), and plain fallbacks without RENDER |
+
+`gallery` draws every core feature, the way it looks with no RENDER at all:
+
+![The gallery example: shapes, batches, an image, fonts and Unicode, masked and stencilled sprites, a stipple tint, a tiled polygon, a copy from the frame](docs/gallery.png)
 
 ## Running
 

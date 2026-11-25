@@ -3,7 +3,8 @@
 //!
 //! Run:   DISPLAY=HOST:0 cargo run --example polish
 //! Mouse: type in the field, Copy, the Size dropdown, Clear... asks first
-//! Keys:  Ctrl+C / Ctrl+V copy and paste the field, Escape closes or quits
+//! Keys:  Ctrl+C / Ctrl+V copy and paste the field, Ctrl+D light or dark,
+//!        Escape closes or quits
 //!
 //! What it shows (see "Looking like a real app" in reference/patterns.md):
 //!   - anti-aliased text from a TrueType font on disk (font_ttf), with the
@@ -15,6 +16,8 @@
 //!   - a destructive action asks first, over a dimmed window (blend_rect);
 //!   - the pointer is a hand over things to click and an I-beam over text;
 //!   - the clipboard: Copy, Ctrl+C and Ctrl+V;
+//!   - dark mode: every colour a (light, dark) pair, chosen by --dark or
+//!     the macOS setting, and Ctrl+D switches;
 //!   - a smooth graph line with a translucent fill, batched into one
 //!     request (polyline_triangles / polygon_triangles);
 //!   - each RENDER call returns false without RENDER (ssh -X), and the
@@ -54,6 +57,7 @@ impl R {
 }
 
 struct Colors {
+    dark: bool,
     bg: u32,
     face: u32,
     edge: u32,
@@ -168,7 +172,9 @@ impl App {
             let g = 1.0 + i as f32 * 1.6;
             let (fx, fy) = (r.x as f32 - g, r.y as f32 - g + 3.0);
             let (fw, fh) = (r.w as f32 + 2.0 * g, r.h as f32 + 2.0 * g);
-            if !x.aa_polygon(&rounded_points(fx, fy, fw, fh, rad + g), 8) {
+            // shadows need more weight to show on a dark ground
+            let alpha = if self.c.dark { 16 } else { 8 };
+            if !x.aa_polygon(&rounded_points(fx, fy, fw, fh, rad + g), alpha) {
                 return;
             }
         }
@@ -345,7 +351,7 @@ impl App {
         self.dialog = Some(Self::save(x, R { x: 0, y: 0, w, h }));
         // without RENDER it stays undimmed (or use a stipple: patterns.md 9)
         x.color(self.c.black);
-        x.blend_rect(0, 0, w, h, 70);
+        x.blend_rect(0, 0, w, h, if self.c.dark { 110 } else { 70 });
         self.shadow(x, DIALOG, 10.0);
         self.rrect(x, DIALOG, 10.0, self.c.edge, self.c.face);
         x.color(self.c.text);
@@ -385,6 +391,35 @@ impl App {
     }
 }
 
+/// The palette as (light, dark) pairs.
+fn colors(x: &mut X11, dark: bool) -> Colors {
+    let pick = |l: (u8, u8, u8), d: (u8, u8, u8)| {
+        let (r, g, b) = if dark { d } else { l };
+        x.rgb(r, g, b)
+    };
+    Colors {
+        dark,
+        bg: pick((236, 236, 236), (30, 30, 32)),
+        face: pick((255, 255, 255), (52, 52, 56)),
+        edge: pick((200, 200, 200), (78, 78, 84)),
+        text: pick((30, 30, 30), (235, 235, 235)),
+        dim: pick((130, 130, 130), (150, 150, 156)),
+        accent: pick((10, 110, 230), (10, 132, 255)),
+        on_accent: pick((255, 255, 255), (255, 255, 255)),
+        danger: pick((215, 50, 45), (230, 70, 60)),
+        black: pick((0, 0, 0), (0, 0, 0)),
+    }
+}
+
+/// macOS says whether it's in dark mode; elsewhere, assume light.
+fn system_dark() -> bool {
+    cfg!(target_os = "macos")
+        && std::process::Command::new("/usr/bin/defaults")
+            .args(["read", "-g", "AppleInterfaceStyle"])
+            .output()
+            .is_ok_and(|o| o.stdout.starts_with(b"Dark"))
+}
+
 fn ui_font(x: &mut X11) -> Font {
     for (path, face) in FONTS {
         if let Ok(data) = std::fs::read(path) {
@@ -402,17 +437,12 @@ fn main() {
         eprintln!("{e}");
         std::process::exit(1)
     });
-    let c = Colors {
-        bg: x.rgb(236, 236, 236),
-        face: x.rgb(255, 255, 255),
-        edge: x.rgb(200, 200, 200),
-        text: x.rgb(30, 30, 30),
-        dim: x.rgb(130, 130, 130),
-        accent: x.rgb(10, 110, 230),
-        on_accent: x.rgb(255, 255, 255),
-        danger: x.rgb(215, 50, 45),
-        black: x.rgb(0, 0, 0),
+    let dark = match std::env::args().nth(1).as_deref() {
+        Some("--dark") => true,
+        Some("--light") => false,
+        _ => system_dark(),
     };
+    let c = colors(&mut x, dark);
     x.background(c.bg);
     x.window("polish", 540, 300);
     x.min_size(540, 300);
@@ -533,6 +563,9 @@ fn main() {
                         }
                     } else if k == key::ESCAPE || (ctrl && k == 'q' as u32) {
                         return;
+                    } else if ctrl && k == 'd' as u32 {
+                        app.c = colors(&mut x, !app.c.dark);
+                        app.draw(&mut x);
                     } else if ctrl && k == 'c' as u32 {
                         x.set_clipboard(&app.field);
                         app.status = "Copied".into();
