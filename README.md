@@ -79,7 +79,7 @@ fn main() {
 | `gallery` | Every drawing feature, with frames paced by fences |
 | `polish` | A form that looks current (the picture above): TrueType text, rounded buttons, a dropdown with a shadow, a dimmed confirm dialog, hover cursors, the clipboard, a smooth graph, dark mode (`--dark`, Ctrl+D), and plain fallbacks without RENDER |
 
-`gallery` draws every core feature, the way it looks with no RENDER at all:
+`gallery` tours the basic drawing calls: shapes, batches, an image, bitmap fonts and Unicode, sprites, a tint, a gradient fill and a copy from the frame.
 
 ![The gallery example: shapes, batches, an image, fonts and Unicode, masked and stencilled sprites, a stipple tint, a tiled polygon, a copy from the frame](docs/gallery.png)
 
